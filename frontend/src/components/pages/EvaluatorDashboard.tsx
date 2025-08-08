@@ -12,12 +12,14 @@ import {
   Zap,
   TrendingUp
 } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 const EvaluatorDashboard: React.FC = () => {
   const [stats, setStats] = useState<EvaluatorStats | null>(null);
   const [pendingSentences, setPendingSentences] = useState<Sentence[]>([]);
   const [recentAssessments, setRecentAssessments] = useState<MTQualityAssessment[]>([]);
   const [isLoading, setIsLoading] = useState(true);
+  const navigate = useNavigate();
 
   useEffect(() => {
     loadDashboardData();
@@ -90,10 +92,10 @@ const EvaluatorDashboard: React.FC = () => {
         <div className="mb-6 sm:mb-8">
           <div className="flex flex-col sm:flex-row sm:items-center space-y-2 sm:space-y-0 sm:space-x-3 mb-2">
             <Brain className="h-6 sm:h-8 w-6 sm:w-8 text-blue-600" />
-            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Machine Translation Evaluator</h1>
+            <h1 className="text-2xl sm:text-3xl font-bold text-gray-900">Translation Quality Evaluator</h1>
           </div>
           <p className="text-sm sm:text-base text-gray-600">
-            DistilBERT-powered machine translation quality assessment platform
+            Review and evaluate machine translation quality and annotation accuracy
           </p>
         </div>
 
@@ -269,6 +271,41 @@ const EvaluatorDashboard: React.FC = () => {
                 </div>
               </div>
             </div>
+          </div>
+        </div>
+
+        {/* Quick Actions */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">Evaluate Annotations</h3>
+              <FileText className="h-6 w-6 text-blue-600" />
+            </div>
+            <p className="text-gray-600 mb-4">
+              Review annotations made by annotators and evaluate their quality
+            </p>
+            <button
+              onClick={() => navigate('/evaluate')}
+              className="w-full bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+            >
+              Start Evaluation
+            </button>
+          </div>
+
+          <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="text-lg font-semibold text-gray-900">MT Quality Assessment</h3>
+              <Target className="h-6 w-6 text-green-600" />
+            </div>
+            <p className="text-gray-600 mb-4">
+              Evaluate machine translation quality based on fluency and adequacy
+            </p>
+            <button
+              onClick={() => navigate('/mt-assess')}
+              className="w-full bg-green-600 text-white px-4 py-2 rounded-lg hover:bg-green-700 transition-colors"
+            >
+              Assess Translations
+            </button>
           </div>
         </div>
 

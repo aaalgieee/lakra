@@ -7,73 +7,42 @@ import {
   Clock, 
   CheckCircle, 
   AlertTriangle, 
-  Zap,
   Save,
-  RotateCcw
+  User,
+  FileText
 } from 'lucide-react';
 import { mtQualityAPI } from '../../services/supabase-api';
 import type { Sentence, MTQualityAssessment, MTQualityCreate } from '../../types';
 
-interface ErrorDisplayProps {
-  errors: Array<{
-    error_type: string;
-    severity: 'minor' | 'major' | 'critical';
-    start_position: number;
-    end_position: number;
-    text_span: string;
-    description: string;
-    suggested_fix?: string;
-  }>;
-  title: string;
-  icon: React.ReactNode;
-  colorClass: string;
+interface RatingButtonsProps {
+  value?: number;
+  onChange: (value: number) => void;
+  label: string;
 }
 
-const ErrorDisplay: React.FC<ErrorDisplayProps> = ({ errors, title, icon, colorClass }) => {
-  if (errors.length === 0) return null;
-  
+const RatingButtons: React.FC<RatingButtonsProps> = ({ value, onChange, label }) => {
   return (
-    <div className={`border rounded-lg p-4 ${colorClass}`}>
-      <div className="flex items-center mb-3">
-        {icon}
-        <h4 className="font-medium ml-2">{title} ({errors.length})</h4>
-      </div>
-      <div className="space-y-2">
-        {errors.map((error, index) => (
-          <div key={index} className="text-sm">
-            <div className="flex items-center justify-between mb-1">
-              <span className="font-medium">"{error.text_span}"</span>
-              <span className={`px-2 py-1 rounded text-xs ${
-                error.severity === 'critical' ? 'bg-red-100 text-red-800' :
-                error.severity === 'major' ? 'bg-yellow-100 text-yellow-800' :
-                'bg-blue-100 text-blue-800'
-              }`}>
-                {error.severity}
-              </span>
-            </div>
-            <p className="text-gray-600 mb-1">{error.description}</p>
-            {error.suggested_fix && (
-              <p className="text-green-600 italic">💡 {error.suggested_fix}</p>
-            )}
-          </div>
+    <div className="space-y-2">
+      <label className="block text-sm font-medium text-gray-700">{label}</label>
+      <div className="flex space-x-2">
+        {[1, 2, 3, 4, 5].map((rating) => (
+          <button
+            key={rating}
+            type="button"
+            onClick={() => onChange(rating)}
+            className={`w-10 h-10 rounded-full border-2 font-medium text-sm transition-all ${
+              value === rating
+                ? 'border-blue-500 bg-blue-500 text-white'
+                : 'border-gray-300 bg-white text-gray-700 hover:border-blue-300 hover:bg-blue-50'
+            }`}
+          >
+            {rating}
+          </button>
         ))}
       </div>
     </div>
   );
 };
-
-const ScoreDisplay: React.FC<{ 
-  label: string; 
-  score: number; 
-  description: string;
-  color: string;
-}> = ({ label, score, description, color }) => (
-  <div className={`text-center p-4 rounded-lg border-2 ${color}`}>
-    <div className="text-2xl font-bold mb-1">{score.toFixed(1)}/5.0</div>
-    <div className="text-sm font-medium mb-1">{label}</div>
-    <div className="text-xs text-gray-600">{description}</div>
-  </div>
-);
 
 const MTQualityInterface: React.FC = () => {
   const navigate = useNavigate();
@@ -82,17 +51,17 @@ const MTQualityInterface: React.FC = () => {
   const [sentence, setSentence] = useState<Sentence | null>(null);
   const [assessment, setAssessment] = useState<MTQualityAssessment | null>(null);
   const [isLoading, setIsLoading] = useState(true);
-  const [isAssessing, setIsAssessing] = useState(false);
+  const [isSubmitting, setIsSubmitting] = useState(false);
   const [message, setMessage] = useState('');
   const [startTime] = useState(new Date());
   
-  // Human feedback state
+  // Human evaluation state
   const [humanFeedback, setHumanFeedback] = useState('');
   const [correctionNotes, setCorrectionNotes] = useState('');
-  const [overrideScores, setOverrideScores] = useState({
-    fluency: null as number | null,
-    adequacy: null as number | null,
-    overall: null as number | null
+  const [evaluationScores, setEvaluationScores] = useState({
+    fluency: undefined as number | undefined,
+    adequacy: undefined as number | undefined,
+    overall: undefined as number | undefined
   });
 
   const loadSentence = useCallback(async () => {
@@ -113,6 +82,11 @@ const MTQualityInterface: React.FC = () => {
           setAssessment(existingAssessment);
           setHumanFeedback(existingAssessment.human_feedback || '');
           setCorrectionNotes(existingAssessment.correction_notes || '');
+          setEvaluationScores({
+            fluency: existingAssessment.fluency_score,
+            adequacy: existingAssessment.adequacy_score,
+            overall: existingAssessment.overall_quality_score
+          });
         }
       } else {
         setMessage('Sentence not found or already assessed');
@@ -136,7 +110,7 @@ const MTQualityInterface: React.FC = () => {
         setAssessment(null);
         setHumanFeedback('');
         setCorrectionNotes('');
-        setOverrideScores({ fluency: null, adequacy: null, overall: null });
+        setEvaluationScores({ fluency: undefined, adequacy: undefined, overall: undefined });
       } else {
         setMessage('No pending sentences to assess');
         navigate('/evaluator');
@@ -157,18 +131,29 @@ const MTQualityInterface: React.FC = () => {
     }
   }, [sentenceId, loadSentence, loadNextSentence]);
 
-  const handleAssess = async () => {
+  const handleScoreChange = (field: keyof typeof evaluationScores, value: number) => {
+    setEvaluationScores(prev => ({ ...prev, [field]: value }));
+  };
+
+  const handleSubmit = async () => {
     if (!sentence) return;
 
-    setIsAssessing(true);
+    // Validation
+    if (!evaluationScores.fluency || !evaluationScores.adequacy || !evaluationScores.overall) {
+      setMessage('Please provide all required scores before submitting');
+      setTimeout(() => setMessage(''), 5000);
+      return;
+    }
+
+    setIsSubmitting(true);
     try {
       const timeSpent = Math.floor((new Date().getTime() - startTime.getTime()) / 1000);
       
       const assessmentData: MTQualityCreate = {
         sentence_id: sentence.id,
-        fluency_score: overrideScores.fluency || undefined,
-        adequacy_score: overrideScores.adequacy || undefined,
-        overall_quality_score: overrideScores.overall || undefined,
+        fluency_score: evaluationScores.fluency,
+        adequacy_score: evaluationScores.adequacy,
+        overall_quality_score: evaluationScores.overall,
         human_feedback: humanFeedback || undefined,
         correction_notes: correctionNotes || undefined,
         time_spent_seconds: timeSpent
@@ -176,7 +161,7 @@ const MTQualityInterface: React.FC = () => {
 
       const result = await mtQualityAPI.createAssessment(assessmentData);
       setAssessment(result);
-      setMessage('Assessment completed successfully! ✨');
+      setMessage('Evaluation submitted successfully! ✨');
       
       // Auto-navigate to next after delay
       setTimeout(() => {
@@ -187,21 +172,21 @@ const MTQualityInterface: React.FC = () => {
       console.error('Error creating assessment:', error);
       setMessage('Error creating assessment. Please try again.');
     } finally {
-      setIsAssessing(false);
+      setIsSubmitting(false);
     }
   };
 
   const handleUpdateAssessment = async () => {
     if (!assessment) return;
 
-    setIsAssessing(true);
+    setIsSubmitting(true);
     try {
       const timeSpent = Math.floor((new Date().getTime() - startTime.getTime()) / 1000);
       
       const updateData = {
-        fluency_score: overrideScores.fluency || undefined,
-        adequacy_score: overrideScores.adequacy || undefined,
-        overall_quality_score: overrideScores.overall || undefined,
+        fluency_score: evaluationScores.fluency,
+        adequacy_score: evaluationScores.adequacy,
+        overall_quality_score: evaluationScores.overall,
         human_feedback: humanFeedback,
         correction_notes: correctionNotes,
         time_spent_seconds: (assessment.time_spent_seconds || 0) + timeSpent
@@ -209,13 +194,13 @@ const MTQualityInterface: React.FC = () => {
 
       const result = await mtQualityAPI.updateAssessment(assessment.id, updateData);
       setAssessment(result);
-      setMessage('Assessment updated successfully! ✨');
+      setMessage('Evaluation updated successfully! ✨');
       
     } catch (error) {
       console.error('Error updating assessment:', error);
       setMessage('Error updating assessment. Please try again.');
     } finally {
-      setIsAssessing(false);
+      setIsSubmitting(false);
     }
   };
 
@@ -224,7 +209,7 @@ const MTQualityInterface: React.FC = () => {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <Brain className="h-12 w-12 text-blue-600 mx-auto mb-4 animate-pulse" />
-          <p className="text-gray-600">Loading MT Quality Assessment...</p>
+          <p className="text-gray-600">Loading MT Quality Evaluation...</p>
         </div>
       </div>
     );
@@ -235,7 +220,7 @@ const MTQualityInterface: React.FC = () => {
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="text-center">
           <CheckCircle className="h-12 w-12 text-gray-400 mx-auto mb-4" />
-          <p className="text-gray-600">No sentence to assess</p>
+          <p className="text-gray-600">No sentence to evaluate</p>
         </div>
       </div>
     );
@@ -256,17 +241,17 @@ const MTQualityInterface: React.FC = () => {
           
           <div className="flex items-center space-x-3 mb-2">
             <Brain className="h-8 w-8 text-blue-600" />
-            <h1 className="text-3xl font-bold text-gray-900">MT Quality Assessment</h1>
+            <h1 className="text-3xl font-bold text-gray-900">MT Quality Evaluation</h1>
           </div>
           <p className="text-gray-600">
-            DistilBERT-powered machine translation quality evaluation
+            Evaluate machine translation quality based on fluency, adequacy, and overall quality
           </p>
         </div>
 
         {/* Message */}
         {message && (
           <div className={`mb-6 p-4 rounded-lg ${
-            message.includes('Error') 
+            message.includes('Error') || message.includes('Please')
               ? 'bg-red-50 text-red-800 border border-red-200' 
               : 'bg-green-50 text-green-800 border border-green-200'
           }`}>
@@ -275,9 +260,9 @@ const MTQualityInterface: React.FC = () => {
         )}
 
         <div className="grid grid-cols-1 lg:grid-cols-2 gap-8">
-          {/* Left Column: Texts and Context */}
+          {/* Left Column: Translation Pair */}
           <div className="space-y-6">
-            {/* Sentence Information */}
+            {/* Translation Information */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
               <div className="flex items-center justify-between mb-4">
                 <h2 className="text-xl font-semibold text-gray-900">Translation Pair</h2>
@@ -307,78 +292,89 @@ const MTQualityInterface: React.FC = () => {
                     <p className="text-gray-900 leading-relaxed">{sentence.machine_translation}</p>
                   </div>
                 </div>
+
+                {sentence.reference_translation && (
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-700 mb-2">Reference Translation (Optional)</h3>
+                    <div className="bg-green-50 border border-green-200 rounded-lg p-4">
+                      <p className="text-gray-900 leading-relaxed">{sentence.reference_translation}</p>
+                    </div>
+                  </div>
+                )}
               </div>
             </div>
 
-            {/* Human Feedback Section */}
+            {/* Evaluation Guidelines */}
             <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-              <h2 className="text-xl font-semibold text-gray-900 mb-4">Human Feedback</h2>
+              <h2 className="text-xl font-semibold text-gray-900 mb-4">Evaluation Guidelines</h2>
+              
+              <div className="space-y-4 text-sm text-gray-700">
+                <div>
+                  <h3 className="font-medium text-gray-900 mb-2">Fluency (1-5)</h3>
+                  <p className="text-gray-600">How well-formed and readable is the translation? Consider grammar, syntax, and naturalness.</p>
+                </div>
+                
+                <div>
+                  <h3 className="font-medium text-gray-900 mb-2">Adequacy (1-5)</h3>
+                  <p className="text-gray-600">How well does the translation preserve the meaning of the source text?</p>
+                </div>
+                
+                <div>
+                  <h3 className="font-medium text-gray-900 mb-2">Overall Quality (1-5)</h3>
+                  <p className="text-gray-600">Combined assessment considering both fluency and adequacy.</p>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          {/* Right Column: Evaluation Form */}
+          <div className="space-y-6">
+            {/* Quality Scores */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <div className="flex items-center justify-between mb-6">
+                <h2 className="text-xl font-semibold text-gray-900">Quality Scores</h2>
+                <div className="flex items-center text-sm text-gray-500">
+                  <Clock className="h-4 w-4 mr-1" />
+                  {assessment?.time_spent_seconds ? `${assessment.time_spent_seconds}s` : 'Starting...'}
+                </div>
+              </div>
+
+              <div className="space-y-6">
+                <RatingButtons
+                  value={evaluationScores.fluency}
+                  onChange={(value) => handleScoreChange('fluency', value)}
+                  label="Fluency Score"
+                />
+                
+                <RatingButtons
+                  value={evaluationScores.adequacy}
+                  onChange={(value) => handleScoreChange('adequacy', value)}
+                  label="Adequacy Score"
+                />
+                
+                <RatingButtons
+                  value={evaluationScores.overall}
+                  onChange={(value) => handleScoreChange('overall', value)}
+                  label="Overall Quality Score"
+                />
+              </div>
+            </div>
+
+            {/* Feedback Section */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              <h2 className="text-xl font-semibold text-gray-900 mb-4">Feedback & Corrections</h2>
               
               <div className="space-y-4">
-                {/* Score Overrides */}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Override AI Scores (optional)
-                  </label>
-                  <div className="grid grid-cols-3 gap-4">
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Fluency</label>
-                      <select
-                        value={overrideScores.fluency || ''}
-                        onChange={(e) => setOverrideScores(prev => ({ ...prev, fluency: e.target.value ? parseFloat(e.target.value) : null }))}
-                        className="select-field text-sm"
-                      >
-                        <option value="">AI Score</option>
-                        <option value="1">1.0</option>
-                        <option value="2">2.0</option>
-                        <option value="3">3.0</option>
-                        <option value="4">4.0</option>
-                        <option value="5">5.0</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Adequacy</label>
-                      <select
-                        value={overrideScores.adequacy || ''}
-                        onChange={(e) => setOverrideScores(prev => ({ ...prev, adequacy: e.target.value ? parseFloat(e.target.value) : null }))}
-                        className="select-field text-sm"
-                      >
-                        <option value="">AI Score</option>
-                        <option value="1">1.0</option>
-                        <option value="2">2.0</option>
-                        <option value="3">3.0</option>
-                        <option value="4">4.0</option>
-                        <option value="5">5.0</option>
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-xs text-gray-600 mb-1">Overall</label>
-                      <select
-                        value={overrideScores.overall || ''}
-                        onChange={(e) => setOverrideScores(prev => ({ ...prev, overall: e.target.value ? parseFloat(e.target.value) : null }))}
-                        className="select-field text-sm"
-                      >
-                        <option value="">AI Score</option>
-                        <option value="1">1.0</option>
-                        <option value="2">2.0</option>
-                        <option value="3">3.0</option>
-                        <option value="4">4.0</option>
-                        <option value="5">5.0</option>
-                      </select>
-                    </div>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    Additional Feedback
+                    General Feedback
                   </label>
                   <textarea
                     value={humanFeedback}
                     onChange={(e) => setHumanFeedback(e.target.value)}
                     className="w-full px-3 py-2 border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                     rows={3}
-                    placeholder="Share your thoughts on the AI assessment or translation quality..."
+                    placeholder="Share your thoughts on the translation quality..."
                   />
                 </div>
 
@@ -396,148 +392,47 @@ const MTQualityInterface: React.FC = () => {
                 </div>
               </div>
             </div>
-          </div>
 
-          {/* Right Column: AI Assessment Results */}
-          <div className="space-y-6">
-            {/* AI Assessment Action */}
-            {!assessment && (
-              <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6 text-center">
-                <Brain className="h-12 w-12 text-blue-600 mx-auto mb-4" />
-                <h2 className="text-xl font-semibold text-gray-900 mb-2">Ready for Assessment</h2>
-                <p className="text-gray-600 mb-6">
-                  Click below to run DistilBERT-powered quality analysis
-                </p>
+            {/* Submit Button */}
+            <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
+              {assessment ? (
                 <button
-                  onClick={handleAssess}
-                  disabled={isAssessing}
-                  className="flex items-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium mx-auto"
+                  onClick={handleUpdateAssessment}
+                  disabled={isSubmitting}
+                  className="w-full flex items-center justify-center px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
                 >
-                  {isAssessing ? (
+                  {isSubmitting ? (
                     <>
-                      <RotateCcw className="h-4 w-4 mr-2 animate-spin" />
-                      Analyzing...
+                      <Clock className="h-4 w-4 mr-2 animate-spin" />
+                      Updating...
                     </>
                   ) : (
                     <>
-                      <Zap className="h-4 w-4 mr-2" />
-                      Run AI Assessment
+                      <Save className="h-4 w-4 mr-2" />
+                      Update Evaluation
                     </>
                   )}
                 </button>
-              </div>
-            )}
-
-            {/* Assessment Results */}
-            {assessment && (
-              <>
-                {/* Quality Scores */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                  <div className="flex items-center justify-between mb-6">
-                    <h2 className="text-xl font-semibold text-gray-900">Quality Scores</h2>
-                    <div className="flex items-center text-sm text-gray-500">
-                      <Clock className="h-4 w-4 mr-1" />
-                      {assessment.time_spent_seconds ? `${assessment.time_spent_seconds}s` : 'N/A'}
-                    </div>
-                  </div>
-
-                  <div className="grid grid-cols-3 gap-4 mb-6">
-                    <ScoreDisplay
-                      label="Fluency"
-                      score={assessment.fluency_score || 0}
-                      description="Grammar & readability"
-                      color="border-blue-200 bg-blue-50"
-                    />
-                    <ScoreDisplay
-                      label="Adequacy"
-                      score={assessment.adequacy_score || 0}
-                      description="Meaning preservation"
-                      color="border-green-200 bg-green-50"
-                    />
-                    <ScoreDisplay
-                      label="Overall"
-                      score={assessment.overall_quality_score || 0}
-                      description="Combined quality"
-                      color="border-purple-200 bg-purple-50"
-                    />
-                  </div>
-
-                  <div className="flex items-center justify-center p-3 bg-gray-50 rounded-lg">
-                    <Star className="h-5 w-5 text-yellow-500 mr-2" />
-                    <span className="text-sm font-medium">
-                      Model Confidence: {assessment.ai_confidence_level ? Math.round(assessment.ai_confidence_level * 100) : 'N/A'}%
-                    </span>
-                  </div>
-                </div>
-
-                {/* Error Analysis */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                  <h2 className="text-xl font-semibold text-gray-900 mb-4">Error Analysis</h2>
-                  
-                  <div className="space-y-4">
-                    <ErrorDisplay
-                      errors={assessment.ai_errors?.filter(e => e.type === 'syntax') || []}
-                      title="Syntax Errors"
-                      icon={<AlertTriangle className="h-5 w-5 text-orange-500" />}
-                      colorClass="border-orange-200 bg-orange-50"
-                    />
-                    
-                    <ErrorDisplay
-                      errors={assessment.ai_errors?.filter(e => e.type === 'semantic') || []}
-                      title="Semantic Errors"
-                      icon={<AlertTriangle className="h-5 w-5 text-red-500" />}
-                      colorClass="border-red-200 bg-red-50"
-                    />
-
-                    {(!assessment.ai_errors || assessment.ai_errors.length === 0) && (
-                      <div className="text-center p-6 bg-green-50 border border-green-200 rounded-lg">
-                        <CheckCircle className="h-8 w-8 text-green-500 mx-auto mb-2" />
-                        <p className="text-green-800 font-medium">No errors detected!</p>
-                        <p className="text-green-600 text-sm">The translation appears to be of good quality.</p>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Quality Explanation */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                  <h2 className="text-xl font-semibold text-gray-900 mb-4">AI Explanation</h2>
-                  <p className="text-gray-700 leading-relaxed mb-4">
-                    {assessment.ai_explanation || 'No detailed explanation available.'}
-                  </p>
-                  
-                  {assessment.ai_suggestions && (
+              ) : (
+                <button
+                  onClick={handleSubmit}
+                  disabled={isSubmitting}
+                  className="w-full flex items-center justify-center px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
+                >
+                  {isSubmitting ? (
                     <>
-                      <h3 className="text-sm font-medium text-gray-700 mb-2">Suggestions</h3>
-                      <div className="text-sm text-gray-600">
-                        {assessment.ai_suggestions}
-                      </div>
+                      <Clock className="h-4 w-4 mr-2 animate-spin" />
+                      Submitting...
+                    </>
+                  ) : (
+                    <>
+                      <Save className="h-4 w-4 mr-2" />
+                      Submit Evaluation
                     </>
                   )}
-                </div>
-
-                {/* Update Assessment Button */}
-                <div className="bg-white rounded-xl shadow-sm border border-gray-200 p-6">
-                  <button
-                    onClick={handleUpdateAssessment}
-                    disabled={isAssessing}
-                    className="w-full flex items-center justify-center px-6 py-3 bg-green-600 text-white rounded-lg hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed font-medium"
-                  >
-                    {isAssessing ? (
-                      <>
-                        <RotateCcw className="h-4 w-4 mr-2 animate-spin" />
-                        Updating...
-                      </>
-                    ) : (
-                      <>
-                        <Save className="h-4 w-4 mr-2" />
-                        Update Assessment
-                      </>
-                    )}
-                  </button>
-                </div>
-              </>
-            )}
+                </button>
+              )}
+            </div>
           </div>
         </div>
       </div>
